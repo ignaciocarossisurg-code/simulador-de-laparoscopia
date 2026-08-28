@@ -47,18 +47,16 @@ def init_db():
         distancia_der REAL DEFAULT 0,
         distancia_total REAL DEFAULT 0,
         ratio_bimanual REAL DEFAULT 1.0,
+        depth_perception INTEGER DEFAULT 4,
+        bimanual_dexterity INTEGER DEFAULT 4,
+        efficiency INTEGER DEFAULT 4,
+        tissue_handling INTEGER DEFAULT 4,
+        autonomy INTEGER DEFAULT 4,
         puntaje_goals INTEGER NOT NULL,
         comentarios TEXT,
         FOREIGN KEY (alumno_id) REFERENCES alumnos(id)
     )''')
-    try:
-        c.execute("ALTER TABLE evaluaciones ADD COLUMN distancia_izq REAL DEFAULT 0")
-        c.execute("ALTER TABLE evaluaciones ADD COLUMN distancia_der REAL DEFAULT 0")
-        c.execute("ALTER TABLE evaluaciones ADD COLUMN distancia_total REAL DEFAULT 0")
-        c.execute("ALTER TABLE evaluaciones ADD COLUMN ratio_bimanual REAL DEFAULT 1.0")
-    except:
-        pass
-
+    
     c.execute('SELECT COUNT(*) as count FROM alumnos')
     if c.fetchone()['count'] == 0:
         c.execute("INSERT INTO alumnos (nombre, comision, nivel) VALUES ('Dr. Juan Pérez', 'Comisión A', 'Residente 1')")
@@ -112,6 +110,7 @@ df_alumnos = obtener_alumnos()
 if df_alumnos.empty:
     st.sidebar.warning("No hay alumnos.")
     alumno_id = None
+    alumno_str = ""
 else:
     opciones = {f"{r['nombre']} ({r['nivel']})": r['id'] for _, r in df_alumnos.iterrows()}
     alumno_str = st.sidebar.selectbox("Seleccionar Alumno:", list(opciones.keys()))
@@ -144,28 +143,27 @@ st.title("🎯 Evaluación y Curvas de Aprendizaje Laparoscópico")
 col_izq, col_der = st.columns([1.1, 1.4], gap="large")
 
 # ----------------------------------------------------
-# COLUMNA IZQUIERDA: CÁMARA INCRUSTADA
+# COLUMNA IZQUIERDA: CÁMARA Y TRACKING
 # ----------------------------------------------------
 with col_izq:
     st.subheader("📹 Captura de Ejercicio")
     
     st.markdown("##### Opción A: Registro por Cámara en Vivo")
-    
-    # Control de estado de grabación en la app
+    st.caption("ℹ️ *Para finalizar el ejercicio sin demoras: pasá la punta de la pinza por el botón rojo superior derecho del video o presioná el botón web abajo.*")
+
     if "grabando" not in st.session_state:
         st.session_state.grabando = False
 
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
-        btn_iniciar = st.button("▶️ Iniciar Cámara", use_container_width=True, type="primary", disabled=st.session_state.grabando)
+        if st.button("▶️ Iniciar Cámara", use_container_width=True, type="primary", disabled=st.session_state.grabando):
+            st.session_state.grabando = True
+            st.session_state.tiempo_arranque = time.time()
+            st.rerun()
+
     with col_btn2:
-        btn_detener = st.button("⏹️ Finalizar y Guardar", use_container_width=True, disabled=not st.session_state.grabando)
+        btn_detener_web = st.button("⏹️ Finalizar y Guardar", use_container_width=True, disabled=not st.session_state.grabando)
 
-    if btn_iniciar:
-        st.session_state.grabando = True
-        st.rerun()
-
-    # Contenedor visual del video dentro de la web
     frame_placeholder = st.empty()
 
     if st.session_state.grabando:
@@ -186,18 +184,20 @@ with col_izq:
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-        t_inicio = time.time()
+        t_inicio = st.session_state.get("tiempo_arranque", time.time())
+        tiempo_sobre_boton = 0
 
-        # Bucle de video en la página web
+        # Coordenadas del botón interactivo superior derecho (x: 480 a 630, y: 10 a 60)
+        BTN_X1, BTN_Y1, BTN_X2, BTN_Y2 = 470, 10, 630, 60
+
         while st.session_state.grabando:
             ret, frame = cap.read()
             if not ret:
-                st.error("No se pudo acceder a la cámara web.")
                 break
 
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-            # Mano Izquierda (Verde)
+            # 1. Tracking Verde (Izquierda)
             mask_v = cv2.inRange(hsv, VERDE_BAJO, VERDE_ALTO)
             mask_v = cv2.erode(mask_v, None, iterations=1)
             mask_v = cv2.dilate(mask_v, None, iterations=1)
@@ -215,7 +215,7 @@ with col_izq:
                     ult_izq = c_izq
             puntos_izq.appendleft(c_izq)
 
-            # Mano Derecha (Azul)
+            # 2. Tracking Azul (Derecha)
             mask_a = cv2.inRange(hsv, AZUL_BAJO, AZUL_ALTO)
             mask_a = cv2.erode(mask_a, None, iterations=1)
             mask_a = cv2.dilate(mask_a, None, iterations=1)
@@ -233,7 +233,7 @@ with col_izq:
                     ult_der = c_der
             puntos_der.appendleft(c_der)
 
-            # Dibujar estelas
+            # Estelas de movimiento
             for i in range(1, len(puntos_izq)):
                 if puntos_izq[i - 1] and puntos_izq[i]:
                     cv2.line(frame, puntos_izq[i - 1], puntos_izq[i], (0, 255, 0), 2)
@@ -242,20 +242,40 @@ with col_izq:
                     cv2.line(frame, puntos_der[i - 1], puntos_der[i], (255, 0, 0), 2)
 
             t_actual = round(time.time() - t_inicio, 1)
-            cv2.rectangle(frame, (10, 10), (280, 100), (0, 0, 0), -1)
+
+            # 3. Panel de métricas superior izquierdo
+            cv2.rectangle(frame, (10, 10), (250, 95), (0, 0, 0), -1)
             cv2.putText(frame, f"Tiempo: {t_actual} s", (20, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             cv2.putText(frame, f"Dist. Izq: {int(dist_izq)} px", (20, 57), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
             cv2.putText(frame, f"Dist. Der: {int(dist_der)} px", (20, 82), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 100, 100), 1)
 
-            # Convertir de BGR a RGB para mostrar en Streamlit
+            # 4. Botón interactivo superior derecho en pantalla
+            pinza_en_boton = False
+            for pt in [c_izq, c_der]:
+                if pt and (BTN_X1 <= pt[0] <= BTN_X2) and (BTN_Y1 <= pt[1] <= BTN_Y2):
+                    pinza_en_boton = True
+                    break
+
+            if pinza_en_boton:
+                tiempo_sobre_boton += 1
+                color_boton = (0, 255, 0) # Verde al activarse
+            else:
+                tiempo_sobre_boton = 0
+                color_boton = (0, 0, 255) # Rojo en reposo
+
+            cv2.rectangle(frame, (BTN_X1, BTN_Y1), (BTN_X2, BTN_Y2), color_boton, -1)
+            cv2.rectangle(frame, (BTN_X1, BTN_Y1), (BTN_X2, BTN_Y2), (255, 255, 255), 2)
+            cv2.putText(frame, "FINALIZAR", (BTN_X1 + 18, BTN_Y1 + 32), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frame_placeholder.image(frame_rgb, channels="RGB", use_container_width=True)
 
-            if btn_detener:
+            # Cierre automático si toca el botón en pantalla (~15 cuadros) o botón web
+            if tiempo_sobre_boton >= 15 or btn_detener_web:
                 st.session_state.grabando = False
                 cap.release()
                 
-                t_fin = round(time.time() - t_inicio, 1)
+                t_fin = max(round(time.time() - t_inicio, 1), 1.0)
                 d_tot = round(dist_izq + dist_der, 1)
                 ratio = round(dist_izq / dist_der, 2) if dist_der > 0 else 1.0
                 goals_auto = 22 if (t_fin <= 100 and d_tot < 4000) else (18 if t_fin <= 140 else 14)
@@ -265,7 +285,7 @@ with col_izq:
                     round(dist_izq, 1), round(dist_der, 1), d_tot, ratio, goals_auto,
                     f"Tracking cinemático. Total: {int(d_tot)}px | Ratio: {ratio}"
                 )
-                st.success(f"✅ Guardado: {t_fin}s | Distancia: {int(d_tot)}px | Ratio: {ratio}")
+                st.success(f"✅ Ejercicio Finalizado: {t_fin} segundos | Distancia Total: {int(d_tot)}px")
                 time.sleep(1)
                 st.rerun()
                 break
