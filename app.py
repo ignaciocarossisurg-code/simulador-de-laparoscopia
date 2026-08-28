@@ -82,6 +82,13 @@ def guardar_alumno(nombre, comision, nivel):
     conn.commit()
     conn.close()
 
+def reiniciar_intentos_alumno(alumno_id):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("DELETE FROM evaluaciones WHERE alumno_id = ?", (alumno_id,))
+    conn.commit()
+    conn.close()
+
 def guardar_intento(alumno_id, ejercicio, t, err, d_izq, d_der, d_tot, ratio, goals, comments):
     conn = get_db()
     c = conn.cursor()
@@ -135,6 +142,13 @@ with st.sidebar.expander("➕ Cargar Nuevo Alumno"):
                 guardar_alumno(n_nom.strip(), n_com, n_niv)
                 st.rerun()
 
+with st.sidebar.expander("⚙️ Gestión de Alumno"):
+    if alumno_id:
+        if st.button("🗑️ Reiniciar intentos de este alumno", use_container_width=True):
+            reiniciar_intentos_alumno(alumno_id)
+            st.sidebar.success("Historial reiniciado.")
+            st.rerun()
+
 # ==========================================
 # CUERPO PRINCIPAL
 # ==========================================
@@ -149,7 +163,7 @@ with col_izq:
     st.subheader("📹 Captura de Ejercicio")
     
     st.markdown("##### Opción A: Registro por Cámara en Vivo")
-    st.caption("ℹ️ *Para finalizar el ejercicio sin demoras: pasá la punta de la pinza por el botón rojo superior derecho del video o presioná el botón web abajo.*")
+    st.caption("ℹ️ *Asegurate de que las cintas VERDE (Izq) y AZUL (Der) tengan buena iluminación.*")
 
     if "grabando" not in st.session_state:
         st.session_state.grabando = False
@@ -167,10 +181,11 @@ with col_izq:
     frame_placeholder = st.empty()
 
     if st.session_state.grabando:
-        VERDE_BAJO = np.array([35, 80, 80])
-        VERDE_ALTO = np.array([85, 255, 255])
-        AZUL_BAJO = np.array([95, 100, 100])
-        AZUL_ALTO = np.array([135, 255, 255])
+        # Rangos de color más tolerantes
+        VERDE_BAJO = np.array([30, 40, 40])
+        VERDE_ALTO = np.array([90, 255, 255])
+        AZUL_BAJO = np.array([90, 50, 50])
+        AZUL_ALTO = np.array([140, 255, 255])
 
         puntos_izq = deque(maxlen=32)
         puntos_der = deque(maxlen=32)
@@ -186,8 +201,6 @@ with col_izq:
 
         t_inicio = st.session_state.get("tiempo_arranque", time.time())
         tiempo_sobre_boton = 0
-
-        # Coordenadas del botón interactivo superior derecho (x: 480 a 630, y: 10 a 60)
         BTN_X1, BTN_Y1, BTN_X2, BTN_Y2 = 470, 10, 630, 60
 
         while st.session_state.grabando:
@@ -197,7 +210,7 @@ with col_izq:
 
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-            # 1. Tracking Verde (Izquierda)
+            # Mano Izquierda (Verde)
             mask_v = cv2.inRange(hsv, VERDE_BAJO, VERDE_ALTO)
             mask_v = cv2.erode(mask_v, None, iterations=1)
             mask_v = cv2.dilate(mask_v, None, iterations=1)
@@ -205,17 +218,17 @@ with col_izq:
             c_izq = None
             if len(cnts_v) > 0:
                 c = max(cnts_v, key=cv2.contourArea)
-                if cv2.contourArea(c) > 80:
+                if cv2.contourArea(c) > 20:  # Umbral más sensible
                     ((x, y), _) = cv2.minEnclosingCircle(c)
                     c_izq = (int(x), int(y))
-                    cv2.circle(frame, c_izq, 6, (0, 255, 0), -1)
-                    cv2.putText(frame, "Izq", (c_izq[0] + 8, c_izq[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+                    cv2.circle(frame, c_izq, 7, (0, 255, 0), -1)
+                    cv2.putText(frame, "IZQ", (c_izq[0] + 8, c_izq[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                     if ult_izq is not None:
                         dist_izq += math.hypot(c_izq[0] - ult_izq[0], c_izq[1] - ult_izq[1])
                     ult_izq = c_izq
             puntos_izq.appendleft(c_izq)
 
-            # 2. Tracking Azul (Derecha)
+            # Mano Derecha (Azul)
             mask_a = cv2.inRange(hsv, AZUL_BAJO, AZUL_ALTO)
             mask_a = cv2.erode(mask_a, None, iterations=1)
             mask_a = cv2.dilate(mask_a, None, iterations=1)
@@ -223,17 +236,17 @@ with col_izq:
             c_der = None
             if len(cnts_a) > 0:
                 c = max(cnts_a, key=cv2.contourArea)
-                if cv2.contourArea(c) > 80:
+                if cv2.contourArea(c) > 20:  # Umbral más sensible
                     ((x, y), _) = cv2.minEnclosingCircle(c)
                     c_der = (int(x), int(y))
-                    cv2.circle(frame, c_der, 6, (255, 0, 0), -1)
-                    cv2.putText(frame, "Der", (c_der[0] + 8, c_der[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
+                    cv2.circle(frame, c_der, 7, (255, 0, 0), -1)
+                    cv2.putText(frame, "DER", (c_der[0] + 8, c_der[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
                     if ult_der is not None:
                         dist_der += math.hypot(c_der[0] - ult_der[0], c_der[1] - ult_der[1])
                     ult_der = c_der
             puntos_der.appendleft(c_der)
 
-            # Estelas de movimiento
+            # Dibujar estelas
             for i in range(1, len(puntos_izq)):
                 if puntos_izq[i - 1] and puntos_izq[i]:
                     cv2.line(frame, puntos_izq[i - 1], puntos_izq[i], (0, 255, 0), 2)
@@ -243,13 +256,13 @@ with col_izq:
 
             t_actual = round(time.time() - t_inicio, 1)
 
-            # 3. Panel de métricas superior izquierdo
+            # Panel de métricas en vivo
             cv2.rectangle(frame, (10, 10), (250, 95), (0, 0, 0), -1)
             cv2.putText(frame, f"Tiempo: {t_actual} s", (20, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             cv2.putText(frame, f"Dist. Izq: {int(dist_izq)} px", (20, 57), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
             cv2.putText(frame, f"Dist. Der: {int(dist_der)} px", (20, 82), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 100, 100), 1)
 
-            # 4. Botón interactivo superior derecho en pantalla
+            # Botón interactivo superior derecho
             pinza_en_boton = False
             for pt in [c_izq, c_der]:
                 if pt and (BTN_X1 <= pt[0] <= BTN_X2) and (BTN_Y1 <= pt[1] <= BTN_Y2):
@@ -258,10 +271,10 @@ with col_izq:
 
             if pinza_en_boton:
                 tiempo_sobre_boton += 1
-                color_boton = (0, 255, 0) # Verde al activarse
+                color_boton = (0, 255, 0)
             else:
                 tiempo_sobre_boton = 0
-                color_boton = (0, 0, 255) # Rojo en reposo
+                color_boton = (0, 0, 255)
 
             cv2.rectangle(frame, (BTN_X1, BTN_Y1), (BTN_X2, BTN_Y2), color_boton, -1)
             cv2.rectangle(frame, (BTN_X1, BTN_Y1), (BTN_X2, BTN_Y2), (255, 255, 255), 2)
@@ -270,22 +283,31 @@ with col_izq:
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frame_placeholder.image(frame_rgb, channels="RGB", use_container_width=True)
 
-            # Cierre automático si toca el botón en pantalla (~15 cuadros) o botón web
             if tiempo_sobre_boton >= 15 or btn_detener_web:
                 st.session_state.grabando = False
                 cap.release()
                 
                 t_fin = max(round(time.time() - t_inicio, 1), 1.0)
                 d_tot = round(dist_izq + dist_der, 1)
-                ratio = round(dist_izq / dist_der, 2) if dist_der > 0 else 1.0
+                
+                # Cálculo de ratio bimanual real
+                if dist_der > 0 and dist_izq > 0:
+                    ratio = round(dist_izq / dist_der, 2)
+                elif dist_der > 0 and dist_izq == 0:
+                    ratio = 0.0 # Solo usó la derecha
+                elif dist_izq > 0 and dist_der == 0:
+                    ratio = 9.9 # Solo usó la izquierda
+                else:
+                    ratio = 1.0
+                
                 goals_auto = 22 if (t_fin <= 100 and d_tot < 4000) else (18 if t_fin <= 140 else 14)
                 
                 guardar_intento(
                     alumno_id, ejercicio_actual, t_fin, 0,
                     round(dist_izq, 1), round(dist_der, 1), d_tot, ratio, goals_auto,
-                    f"Tracking cinemático. Total: {int(d_tot)}px | Ratio: {ratio}"
+                    f"Tracking cinemático. Izq: {int(dist_izq)}px | Der: {int(dist_der)}px | Ratio: {ratio}"
                 )
-                st.success(f"✅ Ejercicio Finalizado: {t_fin} segundos | Distancia Total: {int(d_tot)}px")
+                st.success(f"✅ Ejercicio Finalizado: {t_fin}s | Distancia Total: {int(d_tot)}px | Ratio: {ratio}")
                 time.sleep(1)
                 st.rerun()
                 break
@@ -365,5 +387,5 @@ with col_der:
                 st.plotly_chart(fig_dist, use_container_width=True)
                 
             with tab3:
-                cols = ['id', 'fecha', 'tiempo_segundos', 'distancia_total', 'ratio_bimanual', 'puntaje_goals', 'comentarios']
+                cols = ['id', 'fecha', 'tiempo_segundos', 'distancia_izq', 'distancia_der', 'distancia_total', 'ratio_bimanual', 'puntaje_goals', 'comentarios']
                 st.dataframe(df_intentos[cols], use_container_width=True)
