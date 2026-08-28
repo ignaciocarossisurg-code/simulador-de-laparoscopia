@@ -3,15 +3,23 @@ import sqlite3
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+import cv2
+import time
+import math
+from collections import deque
 
-# Configuración visual de la pantalla
+# ==========================================
+# CONFIGURACIÓN DE PÁGINA
+# ==========================================
 st.set_page_config(
-    page_title="Simulador Laparoscopía - Seguimiento",
+    page_title="Simulador Laparoscópico Quirúrgico",
     page_icon="🩺",
     layout="wide"
 )
 
-# Conexión con base de datos SQLite interna
+# ==========================================
+# BASE DE DATOS SQLITE
+# ==========================================
 def get_db():
     conn = sqlite3.connect("simulacion_laparo.db", check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -35,15 +43,24 @@ def init_db():
         ejercicio TEXT NOT NULL,
         tiempo_segundos REAL NOT NULL,
         errores INTEGER DEFAULT 0,
-        depth_perception INTEGER NOT NULL,
-        bimanual_dexterity INTEGER NOT NULL,
-        efficiency INTEGER NOT NULL,
-        tissue_handling INTEGER NOT NULL,
-        autonomy INTEGER NOT NULL,
+        distancia_izq REAL DEFAULT 0,
+        distancia_der REAL DEFAULT 0,
+        distancia_total REAL DEFAULT 0,
+        ratio_bimanual REAL DEFAULT 1.0,
         puntaje_goals INTEGER NOT NULL,
         comentarios TEXT,
         FOREIGN KEY (alumno_id) REFERENCES alumnos(id)
     )''')
+    
+    # Agregar columnas cinemáticas si la base ya existía
+    try:
+        c.execute("ALTER TABLE evaluaciones ADD COLUMN distancia_izq REAL DEFAULT 0")
+        c.execute("ALTER TABLE evaluaciones ADD COLUMN distancia_der REAL DEFAULT 0")
+        c.execute("ALTER TABLE evaluaciones ADD COLUMN distancia_total REAL DEFAULT 0")
+        c.execute("ALTER TABLE evaluaciones ADD COLUMN ratio_bimanual REAL DEFAULT 1.0")
+    except:
+        pass
+
     c.execute('SELECT COUNT(*) as count FROM alumnos')
     if c.fetchone()['count'] == 0:
         c.execute("INSERT INTO alumnos (nombre, comision, nivel) VALUES ('Dr. Juan Pérez', 'Comisión A', 'Residente 1')")
@@ -53,7 +70,105 @@ def init_db():
 
 init_db()
 
-# Carga de datos
+# ==========================================
+# MOTOR DE TRACKING DE CÁMARA (OPENCV)
+# ==========================================
+def ejecutar_tracking_camara():
+    VERDE_BAJO = np.array([35, 80, 80])
+    VERDE_ALTO = np.array([85, 255, 255])
+    AZUL_BAJO = np.array([95, 100, 100])
+    AZUL_ALTO = np.array([135, 255, 255])
+
+    puntos_izq = deque(maxlen=32)
+    puntos_der = deque(maxlen=32)
+
+    dist_izq = 0.0
+    dist_der = 0.0
+    ult_izq = None
+    ult_der = None
+
+    cap = cv2.VideoCapture(0)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    t_inicio = time.time()
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+        # Tracking Verde (Mano Izquierda)
+        mask_v = cv2.inRange(hsv, VERDE_BAJO, VERDE_ALTO)
+        mask_v = cv2.erode(mask_v, None, iterations=1)
+        mask_v = cv2.dilate(mask_v, None, iterations=1)
+        cnts_v, _ = cv2.findContours(mask_v, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        c_izq = None
+        if len(cnts_v) > 0:
+            c = max(cnts_v, key=cv2.contourArea)
+            if cv2.contourArea(c) > 80:
+                ((x, y), _) = cv2.minEnclosingCircle(c)
+                c_izq = (int(x), int(y))
+                cv2.circle(frame, c_izq, 6, (0, 255, 0), -1)
+                cv2.putText(frame, "Izq", (c_izq[0] + 8, c_izq[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+                if ult_izq is not None:
+                    dist_izq += math.hypot(c_izq[0] - ult_izq[0], c_izq[1] - ult_izq[1])
+                ult_izq = c_izq
+        puntos_izq.appendleft(c_izq)
+
+        # Tracking Azul (Mano Derecha)
+        mask_a = cv2.inRange(hsv, AZUL_BAJO, AZUL_ALTO)
+        mask_a = cv2.erode(mask_a, None, iterations=1)
+        mask_a = cv2.dilate(mask_a, None, iterations=1)
+        cnts_a, _ = cv2.findContours(mask_a, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        c_der = None
+        if len(cnts_a) > 0:
+            c = max(cnts_a, key=cv2.contourArea)
+            if cv2.contourArea(c) > 80:
+                ((x, y), _) = cv2.minEnclosingCircle(c)
+                c_der = (int(x), int(y))
+                cv2.circle(frame, c_der, 6, (255, 0, 0), -1)
+                cv2.putText(frame, "Der", (c_der[0] + 8, c_der[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
+                if ult_der is not None:
+                    dist_der += math.hypot(c_der[0] - ult_der[0], c_der[1] - ult_der[1])
+                ult_der = c_der
+        puntos_der.appendleft(c_der)
+
+        # Trayectorias
+        for i in range(1, len(puntos_izq)):
+            if puntos_izq[i - 1] and puntos_izq[i]:
+                cv2.line(frame, puntos_izq[i - 1], puntos_izq[i], (0, 255, 0), 2)
+        for i in range(1, len(puntos_der)):
+            if puntos_der[i - 1] and puntos_der[i]:
+                cv2.line(frame, puntos_der[i - 1], puntos_der[i], (255, 0, 0), 2)
+
+        # Info en pantalla
+        t_transcurrido = round(time.time() - t_inicio, 1)
+        cv2.rectangle(frame, (10, 10), (280, 100), (0, 0, 0), -1)
+        cv2.putText(frame, f"Tiempo: {t_transcurrido} s", (20, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        cv2.putText(frame, f"Dist. Izq: {int(dist_izq)} px", (20, 57), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        cv2.putText(frame, f"Dist. Der: {int(dist_der)} px", (20, 82), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 100, 100), 1)
+
+        cv2.imshow("Box Trainer - Evaluacion en Vivo (Presiona 'q' para finalizar)", frame)
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
+    
+    t_final = round(time.time() - t_inicio, 1)
+    d_tot = round(dist_izq + dist_der, 1)
+    ratio = round(dist_izq / dist_der, 2) if dist_der > 0 else 1.0
+
+    return t_final, round(dist_izq, 1), round(dist_der, 1), d_tot, ratio
+
+# ==========================================
+# GESTIÓN DE DATOS
+# ==========================================
 def obtener_alumnos():
     conn = get_db()
     df = pd.read_sql_query("SELECT id, nombre, comision, nivel FROM alumnos ORDER BY nombre ASC", conn)
@@ -67,36 +182,36 @@ def guardar_alumno(nombre, comision, nivel):
     conn.commit()
     conn.close()
 
-def guardar_evaluacion(alumno_id, ejercicio, tiempo, errores, depth, bimanual, eff, tissue, auto, comments):
-    goals_total = depth + bimanual + eff + tissue + auto
+def guardar_intento(alumno_id, ejercicio, t, err, d_izq, d_der, d_tot, ratio, goals, comments):
     conn = get_db()
     c = conn.cursor()
     c.execute('''
     INSERT INTO evaluaciones (
         alumno_id, ejercicio, tiempo_segundos, errores,
-        depth_perception, bimanual_dexterity, efficiency,
-        tissue_handling, autonomy, puntaje_goals, comentarios
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (alumno_id, ejercicio, tiempo, errores, depth, bimanual, eff, tissue, auto, goals_total, comments))
+        distancia_izq, distancia_der, distancia_total, ratio_bimanual,
+        puntaje_goals, comentarios
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (alumno_id, ejercicio, t, err, d_izq, d_der, d_tot, ratio, goals, comments))
     conn.commit()
     conn.close()
 
 def obtener_evaluaciones(alumno_id, ejercicio):
     conn = get_db()
-    query = "SELECT * FROM evaluaciones WHERE alumno_id = ? AND ejercicio = ? ORDER BY id ASC"
-    df = pd.read_sql_query(query, conn, params=(alumno_id, ejercicio))
+    df = pd.read_sql_query("SELECT * FROM evaluaciones WHERE alumno_id = ? AND ejercicio = ? ORDER BY id ASC", conn, params=(alumno_id, ejercicio))
     conn.close()
     return df
 
-# Barra Lateral
+# ==========================================
+# INTERFAZ DE USUARIO
+# ==========================================
 st.sidebar.title("🩺 Simulación Quirúrgica")
 df_alumnos = obtener_alumnos()
 
 if df_alumnos.empty:
-    st.sidebar.warning("No hay alumnos cargados.")
+    st.sidebar.warning("No hay alumnos.")
     alumno_id = None
 else:
-    opciones = {f"{row['nombre']} ({row['nivel']})": row['id'] for _, row in df_alumnos.iterrows()}
+    opciones = {f"{r['nombre']} ({r['nivel']})": r['id'] for _, r in df_alumnos.iterrows()}
     alumno_str = st.sidebar.selectbox("Seleccionar Alumno:", list(opciones.keys()))
     alumno_id = opciones[alumno_str]
 
@@ -106,59 +221,73 @@ ejercicios = [
     "Ligadura con Endoloop",
     "Sutura y Nudo Intracorpóreo"
 ]
-ejercicio_actual = st.sidebar.selectbox("Ejercicio:", ejercicios)
+ejercicio_actual = st.sidebar.selectbox("Ejercicio en Curso:", ejercicios)
 
 st.sidebar.markdown("---")
 with st.sidebar.expander("➕ Cargar Nuevo Alumno"):
-    with st.form("form_nuevo_alumno", clear_on_submit=True):
-        n_nombre = st.text_input("Nombre y Apellido")
-        n_comision = st.text_input("Comisión", value="Comisión A")
-        n_nivel = st.selectbox("Nivel", ["Estudiante de Grado", "Adscripto", "Residente 1", "Residente 2", "Fellow"])
+    with st.form("f_nuevo"):
+        n_nom = st.text_input("Nombre y Apellido")
+        n_com = st.text_input("Comisión", value="Comisión A")
+        n_niv = st.selectbox("Nivel", ["Estudiante de Grado", "Adscripto", "Residente 1", "Residente 2", "Fellow"])
         if st.form_submit_button("Guardar"):
-            if n_nombre.strip():
-                guardar_alumno(n_nombre.strip(), n_comision, n_nivel)
+            if n_nom.strip():
+                guardar_alumno(n_nom.strip(), n_com, n_niv)
                 st.rerun()
 
-# Pantalla Principal
-st.title("🎯 Evaluación y Curva de Aprendizaje")
+st.title("🎯 Evaluación y Curvas de Aprendizaje Laparoscópico")
 
-col_form, col_analitica = st.columns([1.1, 1.4], gap="large")
+col_izq, col_der = st.columns([1.1, 1.4], gap="large")
 
-with col_form:
-    st.subheader("📋 Registro de Intento")
-    with st.form("form_eval", clear_on_submit=False):
-        col_t, col_e = st.columns(2)
-        with col_t:
-            tiempo_seg = st.number_input("Tiempo (segundos):", min_value=1.0, max_value=1200.0, value=95.0, step=1.0)
-        with col_e:
-            errores = st.number_input("Errores / Caídas:", min_value=0, max_value=50, value=0, step=1)
+# ----------------------------------------------------
+# COLUMNA IZQUIERDA: CÁMARA O CARGA MANUAL
+# ----------------------------------------------------
+with col_izq:
+    st.subheader("📹 Captura de Ejercicio")
+    
+    st.markdown("##### Opción A: Registro Automático por Cámara")
+    if st.button("🎥 Iniciar Ejercicio con Cámara", use_container_width=True, type="primary"):
+        with st.spinner("Cámara activa. Realice el ejercicio y presione 'q' para finalizar..."):
+            t_fin, d_izq, d_der, d_tot, ratio = ejecutar_tracking_camara()
             
-        st.markdown("#### Escala GOALS (1 al 5)")
-        depth = st.slider("1. Percepción de Profundidad:", 1, 5, 3)
-        bimanual = st.slider("2. Destreza Bimanual:", 1, 5, 3)
-        efficiency = st.slider("3. Eficiencia y Economía:", 1, 5, 3)
-        tissue = st.slider("4. Manejo de Tejidos:", 1, 5, 3)
-        autonomy = st.slider("5. Autonomía:", 1, 5, 4)
-        
-        st.info(f"**Puntaje GOALS Total:** `{depth + bimanual + efficiency + tissue + autonomy} / 25 pts`")
-        comentarios = st.text_area("Observaciones / Feedback:", placeholder="Comentarios del docente...")
-        
-        if st.form_submit_button("💾 Guardar Intento", use_container_width=True):
-            if alumno_id:
-                guardar_evaluacion(alumno_id, ejercicio_actual, tiempo_seg, errores, depth, bimanual, efficiency, tissue, autonomy, comentarios)
-                st.success("Guardado correctamente.")
-                st.rerun()
+            # Estimación automática de puntaje GOALS según economía de movimiento
+            goals_auto = 22 if (t_fin <= 100 and d_tot < 4000) else (18 if t_fin <= 140 else 14)
+            
+            guardar_intento(
+                alumno_id, ejercicio_actual, t_fin, 0,
+                d_izq, d_der, d_tot, ratio, goals_auto,
+                f"Evaluación por cámara. Distancia total: {int(d_tot)}px, Ratio bimanual: {ratio}"
+            )
+            st.success(f"✅ Intento registrado: {t_fin}s | Distancia: {int(d_tot)}px | Balance: {ratio}")
+            st.rerun()
+            
+    st.markdown("---")
+    st.markdown("##### Opción B: Carga Manual (Docente)")
+    with st.form("form_manual"):
+        c_t, c_e = st.columns(2)
+        with c_t:
+            t_man = st.number_input("Tiempo (segundos):", value=90.0, step=1.0)
+        with c_e:
+            e_man = st.number_input("Errores / Caídas:", value=0, step=1)
+        g_man = st.slider("Puntaje GOALS Total (5 a 25):", 5, 25, 20)
+        obs_man = st.text_area("Observaciones del evaluador:", placeholder="Comentarios...")
+        if st.form_submit_button("💾 Guardar Manualmente", use_container_width=True):
+            guardar_intento(alumno_id, ejercicio_actual, t_man, e_man, 0, 0, 0, 1.0, g_man, obs_man)
+            st.success("Guardado.")
+            st.rerun()
 
-with col_analitica:
-    st.subheader("📈 Progreso y Curva CUSUM")
+# ----------------------------------------------------
+# COLUMNA DERECHA: ANALÍTICA Y CURVAS CUSUM
+# ----------------------------------------------------
+with col_der:
+    st.subheader("📈 Desempeño y Métricas Cinemáticas")
     if alumno_id:
         df_intentos = obtener_evaluaciones(alumno_id, ejercicio_actual)
         if df_intentos.empty:
-            st.warning("Aún no hay intentos registrados para este ejercicio. Guarde el primer intento a la izquierda para ver el gráfico.")
+            st.warning("Sin intentos registrados para este ejercicio.")
         else:
             total = len(df_intentos)
             mejor_t = df_intentos['tiempo_segundos'].min()
-            goals_prom = df_intentos['puntaje_goals'].mean()
+            mejor_dist = df_intentos[df_intentos['distancia_total'] > 0]['distancia_total'].min() if (df_intentos['distancia_total'] > 0).any() else 0
             
             benchmarks = {
                 "Transferencia de Clavijas (Peg Transfer)": 98.0,
@@ -171,31 +300,42 @@ with col_analitica:
             k1, k2, k3, k4 = st.columns(4)
             k1.metric("Intentos", f"{total}")
             k2.metric("Mejor Tiempo", f"{mejor_t:.1f} s")
-            k3.metric("GOALS Prom.", f"{goals_prom:.1f}/25")
+            k3.metric("Mejor Trayectoria", f"{int(mejor_dist)} px" if mejor_dist > 0 else "N/A")
             
-            # Criterio de competencia (últimos 2 intentos dentro de la meta de tiempo y GOALS >= 21)
+            # Competencia
             ultimos_2 = df_intentos.tail(2)
             if len(ultimos_2) >= 2 and (ultimos_2['tiempo_segundos'] <= meta_t).all() and (ultimos_2['puntaje_goals'] >= 21).all():
                 k4.success("🌟 COMPETENTE")
             else:
                 k4.info("🔄 En Formación")
             
-            # Gráfico CUSUM
-            df_intentos['exito'] = (df_intentos['tiempo_segundos'] <= meta_t) & (df_intentos['puntaje_goals'] >= 21)
-            cusum = []
-            acc = 0
-            for ex in df_intentos['exito']:
-                acc += 0.5 if ex else -1.0
-                cusum.append(acc)
+            # Pestañas de Gráficos
+            tab1, tab2, tab3 = st.tabs(["📊 Curva CUSUM", "📏 Economía de Movimiento", "📋 Historial"])
             
-            df_intentos['intento'] = range(1, total + 1)
-            df_intentos['cusum'] = cusum
-            
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=df_intentos['intento'], y=df_intentos['cusum'], mode='lines+markers', name='CUSUM', line=dict(color='#1E88E5', width=3)))
-            fig.add_hline(y=3.0, line_dash="dash", line_color="green", annotation_text="Meta de Competencia")
-            fig.update_layout(title="Curva de Aprendizaje Acumulativa (CUSUM)", xaxis_title="Intento", yaxis_title="Puntaje", height=320, template="plotly_white", margin=dict(l=10, r=10, t=40, b=10))
-            st.plotly_chart(fig, use_container_width=True)
-            
-            with st.expander("Ver tabla con todos los intentos"):
-                st.dataframe(df_intentos[['id', 'fecha', 'tiempo_segundos', 'errores', 'puntaje_goals', 'comentarios']], use_container_width=True)
+            with tab1:
+                df_intentos['exito'] = (df_intentos['tiempo_segundos'] <= meta_t) & (df_intentos['puntaje_goals'] >= 21)
+                cusum = []
+                acc = 0
+                for ex in df_intentos['exito']:
+                    acc += 0.5 if ex else -1.0
+                    cusum.append(acc)
+                
+                df_intentos['intento'] = range(1, total + 1)
+                df_intentos['cusum'] = cusum
+                
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=df_intentos['intento'], y=df_intentos['cusum'], mode='lines+markers', name='CUSUM', line=dict(color='#1E88E5', width=3)))
+                fig.add_hline(y=3.0, line_dash="dash", line_color="green", annotation_text="Meta de Competencia")
+                fig.update_layout(title="Curva CUSUM (Suma Acumulativa)", xaxis_title="Intento", yaxis_title="Puntaje", height=300, template="plotly_white", margin=dict(l=10, r=10, t=35, b=10))
+                st.plotly_chart(fig, use_container_width=True)
+                
+            with tab2:
+                fig_dist = go.Figure()
+                fig_dist.add_trace(go.Bar(x=df_intentos['intento'], y=df_intentos['distancia_izq'], name='Mano Izq (px)', marker_color='#4CAF50'))
+                fig_dist.add_trace(go.Bar(x=df_intentos['intento'], y=df_intentos['distancia_der'], name='Mano Der (px)', marker_color='#2196F3'))
+                fig_dist.update_layout(barmode='stack', title="Distancia Recorrida por Mano (Trayectoria)", xaxis_title="Intento", yaxis_title="Píxeles", height=300, template="plotly_white", margin=dict(l=10, r=10, t=35, b=10))
+                st.plotly_chart(fig_dist, use_container_width=True)
+                
+            with tab3:
+                cols = ['id', 'fecha', 'tiempo_segundos', 'distancia_total', 'ratio_bimanual', 'puntaje_goals', 'comentarios']
+                st.dataframe(df_intentos[cols], use_container_width=True)
