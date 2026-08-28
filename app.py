@@ -157,13 +157,13 @@ st.title("🎯 Evaluación y Curvas de Aprendizaje Laparoscópico")
 col_izq, col_der = st.columns([1.1, 1.4], gap="large")
 
 # ----------------------------------------------------
-# COLUMNA IZQUIERDA: CÁMARA Y TRACKING
+# COLUMNA IZQUIERDA: CÁMARA Y TRACKING ORIGINAL
 # ----------------------------------------------------
 with col_izq:
     st.subheader("📹 Captura de Ejercicio")
     
     st.markdown("##### Opción A: Registro por Cámara en Vivo")
-    st.caption("ℹ️ *Asegurate de que las cintas VERDE (Izq) y AZUL (Der) tengan buena iluminación.*")
+    st.caption("ℹ️ *Tocá el botón rojo superior derecho con la pinza para finalizar el ejercicio sin demoras.*")
 
     if "grabando" not in st.session_state:
         st.session_state.grabando = False
@@ -181,11 +181,11 @@ with col_izq:
     frame_placeholder = st.empty()
 
     if st.session_state.grabando:
-        # Rangos de color más tolerantes
-        VERDE_BAJO = np.array([30, 40, 40])
-        VERDE_ALTO = np.array([90, 255, 255])
-        AZUL_BAJO = np.array([90, 50, 50])
-        AZUL_ALTO = np.array([140, 255, 255])
+        # PARÁMETROS HSV ORIGINALES PRECISOS
+        VERDE_BAJO = np.array([35, 80, 80])
+        VERDE_ALTO = np.array([85, 255, 255])
+        AZUL_BAJO = np.array([95, 100, 100])
+        AZUL_ALTO = np.array([135, 255, 255])
 
         puntos_izq = deque(maxlen=32)
         puntos_der = deque(maxlen=32)
@@ -210,7 +210,7 @@ with col_izq:
 
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-            # Mano Izquierda (Verde)
+            # Mano Izquierda (Verde) - Filtro original preciso
             mask_v = cv2.inRange(hsv, VERDE_BAJO, VERDE_ALTO)
             mask_v = cv2.erode(mask_v, None, iterations=1)
             mask_v = cv2.dilate(mask_v, None, iterations=1)
@@ -218,17 +218,17 @@ with col_izq:
             c_izq = None
             if len(cnts_v) > 0:
                 c = max(cnts_v, key=cv2.contourArea)
-                if cv2.contourArea(c) > 20:  # Umbral más sensible
+                if cv2.contourArea(c) > 80:  # Tamaño original estable
                     ((x, y), _) = cv2.minEnclosingCircle(c)
                     c_izq = (int(x), int(y))
-                    cv2.circle(frame, c_izq, 7, (0, 255, 0), -1)
-                    cv2.putText(frame, "IZQ", (c_izq[0] + 8, c_izq[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                    cv2.circle(frame, c_izq, 6, (0, 255, 0), -1)
+                    cv2.putText(frame, "Izq", (c_izq[0] + 8, c_izq[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
                     if ult_izq is not None:
                         dist_izq += math.hypot(c_izq[0] - ult_izq[0], c_izq[1] - ult_izq[1])
                     ult_izq = c_izq
             puntos_izq.appendleft(c_izq)
 
-            # Mano Derecha (Azul)
+            # Mano Derecha (Azul) - Filtro original preciso
             mask_a = cv2.inRange(hsv, AZUL_BAJO, AZUL_ALTO)
             mask_a = cv2.erode(mask_a, None, iterations=1)
             mask_a = cv2.dilate(mask_a, None, iterations=1)
@@ -236,17 +236,17 @@ with col_izq:
             c_der = None
             if len(cnts_a) > 0:
                 c = max(cnts_a, key=cv2.contourArea)
-                if cv2.contourArea(c) > 20:  # Umbral más sensible
+                if cv2.contourArea(c) > 80:  # Tamaño original estable
                     ((x, y), _) = cv2.minEnclosingCircle(c)
                     c_der = (int(x), int(y))
-                    cv2.circle(frame, c_der, 7, (255, 0, 0), -1)
-                    cv2.putText(frame, "DER", (c_der[0] + 8, c_der[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+                    cv2.circle(frame, c_der, 6, (255, 0, 0), -1)
+                    cv2.putText(frame, "Der", (c_der[0] + 8, c_der[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
                     if ult_der is not None:
                         dist_der += math.hypot(c_der[0] - ult_der[0], c_der[1] - ult_der[1])
                     ult_der = c_der
             puntos_der.appendleft(c_der)
 
-            # Dibujar estelas
+            # Estelas
             for i in range(1, len(puntos_izq)):
                 if puntos_izq[i - 1] and puntos_izq[i]:
                     cv2.line(frame, puntos_izq[i - 1], puntos_izq[i], (0, 255, 0), 2)
@@ -256,7 +256,7 @@ with col_izq:
 
             t_actual = round(time.time() - t_inicio, 1)
 
-            # Panel de métricas en vivo
+            # Métricas en vivo
             cv2.rectangle(frame, (10, 10), (250, 95), (0, 0, 0), -1)
             cv2.putText(frame, f"Tiempo: {t_actual} s", (20, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             cv2.putText(frame, f"Dist. Izq: {int(dist_izq)} px", (20, 57), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
@@ -290,13 +290,12 @@ with col_izq:
                 t_fin = max(round(time.time() - t_inicio, 1), 1.0)
                 d_tot = round(dist_izq + dist_der, 1)
                 
-                # Cálculo de ratio bimanual real
                 if dist_der > 0 and dist_izq > 0:
                     ratio = round(dist_izq / dist_der, 2)
                 elif dist_der > 0 and dist_izq == 0:
-                    ratio = 0.0 # Solo usó la derecha
+                    ratio = 0.0
                 elif dist_izq > 0 and dist_der == 0:
-                    ratio = 9.9 # Solo usó la izquierda
+                    ratio = 9.9
                 else:
                     ratio = 1.0
                 
@@ -307,7 +306,7 @@ with col_izq:
                     round(dist_izq, 1), round(dist_der, 1), d_tot, ratio, goals_auto,
                     f"Tracking cinemático. Izq: {int(dist_izq)}px | Der: {int(dist_der)}px | Ratio: {ratio}"
                 )
-                st.success(f"✅ Ejercicio Finalizado: {t_fin}s | Distancia Total: {int(d_tot)}px | Ratio: {ratio}")
+                st.success(f"✅ Intento registrado: {t_fin}s | Distancia: {int(d_tot)}px | Ratio: {ratio}")
                 time.sleep(1)
                 st.rerun()
                 break
