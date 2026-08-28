@@ -51,8 +51,6 @@ def init_db():
         comentarios TEXT,
         FOREIGN KEY (alumno_id) REFERENCES alumnos(id)
     )''')
-    
-    # Agregar columnas cinemáticas si la base ya existía
     try:
         c.execute("ALTER TABLE evaluaciones ADD COLUMN distancia_izq REAL DEFAULT 0")
         c.execute("ALTER TABLE evaluaciones ADD COLUMN distancia_der REAL DEFAULT 0")
@@ -69,102 +67,6 @@ def init_db():
     conn.close()
 
 init_db()
-
-# ==========================================
-# MOTOR DE TRACKING DE CÁMARA (OPENCV)
-# ==========================================
-def ejecutar_tracking_camara():
-    VERDE_BAJO = np.array([35, 80, 80])
-    VERDE_ALTO = np.array([85, 255, 255])
-    AZUL_BAJO = np.array([95, 100, 100])
-    AZUL_ALTO = np.array([135, 255, 255])
-
-    puntos_izq = deque(maxlen=32)
-    puntos_der = deque(maxlen=32)
-
-    dist_izq = 0.0
-    dist_der = 0.0
-    ult_izq = None
-    ult_der = None
-
-    cap = cv2.VideoCapture(0)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-
-    t_inicio = time.time()
-
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-
-        # Tracking Verde (Mano Izquierda)
-        mask_v = cv2.inRange(hsv, VERDE_BAJO, VERDE_ALTO)
-        mask_v = cv2.erode(mask_v, None, iterations=1)
-        mask_v = cv2.dilate(mask_v, None, iterations=1)
-        cnts_v, _ = cv2.findContours(mask_v, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        c_izq = None
-        if len(cnts_v) > 0:
-            c = max(cnts_v, key=cv2.contourArea)
-            if cv2.contourArea(c) > 80:
-                ((x, y), _) = cv2.minEnclosingCircle(c)
-                c_izq = (int(x), int(y))
-                cv2.circle(frame, c_izq, 6, (0, 255, 0), -1)
-                cv2.putText(frame, "Izq", (c_izq[0] + 8, c_izq[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
-                if ult_izq is not None:
-                    dist_izq += math.hypot(c_izq[0] - ult_izq[0], c_izq[1] - ult_izq[1])
-                ult_izq = c_izq
-        puntos_izq.appendleft(c_izq)
-
-        # Tracking Azul (Mano Derecha)
-        mask_a = cv2.inRange(hsv, AZUL_BAJO, AZUL_ALTO)
-        mask_a = cv2.erode(mask_a, None, iterations=1)
-        mask_a = cv2.dilate(mask_a, None, iterations=1)
-        cnts_a, _ = cv2.findContours(mask_a, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        c_der = None
-        if len(cnts_a) > 0:
-            c = max(cnts_a, key=cv2.contourArea)
-            if cv2.contourArea(c) > 80:
-                ((x, y), _) = cv2.minEnclosingCircle(c)
-                c_der = (int(x), int(y))
-                cv2.circle(frame, c_der, 6, (255, 0, 0), -1)
-                cv2.putText(frame, "Der", (c_der[0] + 8, c_der[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
-                if ult_der is not None:
-                    dist_der += math.hypot(c_der[0] - ult_der[0], c_der[1] - ult_der[1])
-                ult_der = c_der
-        puntos_der.appendleft(c_der)
-
-        # Trayectorias
-        for i in range(1, len(puntos_izq)):
-            if puntos_izq[i - 1] and puntos_izq[i]:
-                cv2.line(frame, puntos_izq[i - 1], puntos_izq[i], (0, 255, 0), 2)
-        for i in range(1, len(puntos_der)):
-            if puntos_der[i - 1] and puntos_der[i]:
-                cv2.line(frame, puntos_der[i - 1], puntos_der[i], (255, 0, 0), 2)
-
-        # Info en pantalla
-        t_transcurrido = round(time.time() - t_inicio, 1)
-        cv2.rectangle(frame, (10, 10), (280, 100), (0, 0, 0), -1)
-        cv2.putText(frame, f"Tiempo: {t_transcurrido} s", (20, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        cv2.putText(frame, f"Dist. Izq: {int(dist_izq)} px", (20, 57), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-        cv2.putText(frame, f"Dist. Der: {int(dist_der)} px", (20, 82), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 100, 100), 1)
-
-        cv2.imshow("Box Trainer - Evaluacion en Vivo (Presiona 'q' para finalizar)", frame)
-
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-
-    cap.release()
-    cv2.destroyAllWindows()
-    
-    t_final = round(time.time() - t_inicio, 1)
-    d_tot = round(dist_izq + dist_der, 1)
-    ratio = round(dist_izq / dist_der, 2) if dist_der > 0 else 1.0
-
-    return t_final, round(dist_izq, 1), round(dist_der, 1), d_tot, ratio
 
 # ==========================================
 # GESTIÓN DE DATOS
@@ -202,7 +104,7 @@ def obtener_evaluaciones(alumno_id, ejercicio):
     return df
 
 # ==========================================
-# INTERFAZ DE USUARIO
+# BARRA LATERAL
 # ==========================================
 st.sidebar.title("🩺 Simulación Quirúrgica")
 df_alumnos = obtener_alumnos()
@@ -234,32 +136,140 @@ with st.sidebar.expander("➕ Cargar Nuevo Alumno"):
                 guardar_alumno(n_nom.strip(), n_com, n_niv)
                 st.rerun()
 
+# ==========================================
+# CUERPO PRINCIPAL
+# ==========================================
 st.title("🎯 Evaluación y Curvas de Aprendizaje Laparoscópico")
 
 col_izq, col_der = st.columns([1.1, 1.4], gap="large")
 
 # ----------------------------------------------------
-# COLUMNA IZQUIERDA: CÁMARA O CARGA MANUAL
+# COLUMNA IZQUIERDA: CÁMARA INCRUSTADA
 # ----------------------------------------------------
 with col_izq:
     st.subheader("📹 Captura de Ejercicio")
     
-    st.markdown("##### Opción A: Registro Automático por Cámara")
-    if st.button("🎥 Iniciar Ejercicio con Cámara", use_container_width=True, type="primary"):
-        with st.spinner("Cámara activa. Realice el ejercicio y presione 'q' para finalizar..."):
-            t_fin, d_izq, d_der, d_tot, ratio = ejecutar_tracking_camara()
-            
-            # Estimación automática de puntaje GOALS según economía de movimiento
-            goals_auto = 22 if (t_fin <= 100 and d_tot < 4000) else (18 if t_fin <= 140 else 14)
-            
-            guardar_intento(
-                alumno_id, ejercicio_actual, t_fin, 0,
-                d_izq, d_der, d_tot, ratio, goals_auto,
-                f"Evaluación por cámara. Distancia total: {int(d_tot)}px, Ratio bimanual: {ratio}"
-            )
-            st.success(f"✅ Intento registrado: {t_fin}s | Distancia: {int(d_tot)}px | Balance: {ratio}")
-            st.rerun()
-            
+    st.markdown("##### Opción A: Registro por Cámara en Vivo")
+    
+    # Control de estado de grabación en la app
+    if "grabando" not in st.session_state:
+        st.session_state.grabando = False
+
+    col_btn1, col_btn2 = st.columns(2)
+    with col_btn1:
+        btn_iniciar = st.button("▶️ Iniciar Cámara", use_container_width=True, type="primary", disabled=st.session_state.grabando)
+    with col_btn2:
+        btn_detener = st.button("⏹️ Finalizar y Guardar", use_container_width=True, disabled=not st.session_state.grabando)
+
+    if btn_iniciar:
+        st.session_state.grabando = True
+        st.rerun()
+
+    # Contenedor visual del video dentro de la web
+    frame_placeholder = st.empty()
+
+    if st.session_state.grabando:
+        VERDE_BAJO = np.array([35, 80, 80])
+        VERDE_ALTO = np.array([85, 255, 255])
+        AZUL_BAJO = np.array([95, 100, 100])
+        AZUL_ALTO = np.array([135, 255, 255])
+
+        puntos_izq = deque(maxlen=32)
+        puntos_der = deque(maxlen=32)
+        dist_izq = 0.0
+        dist_der = 0.0
+        ult_izq = None
+        ult_der = None
+
+        cap = cv2.VideoCapture(0)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+        t_inicio = time.time()
+
+        # Bucle de video en la página web
+        while st.session_state.grabando:
+            ret, frame = cap.read()
+            if not ret:
+                st.error("No se pudo acceder a la cámara web.")
+                break
+
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+            # Mano Izquierda (Verde)
+            mask_v = cv2.inRange(hsv, VERDE_BAJO, VERDE_ALTO)
+            mask_v = cv2.erode(mask_v, None, iterations=1)
+            mask_v = cv2.dilate(mask_v, None, iterations=1)
+            cnts_v, _ = cv2.findContours(mask_v, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            c_izq = None
+            if len(cnts_v) > 0:
+                c = max(cnts_v, key=cv2.contourArea)
+                if cv2.contourArea(c) > 80:
+                    ((x, y), _) = cv2.minEnclosingCircle(c)
+                    c_izq = (int(x), int(y))
+                    cv2.circle(frame, c_izq, 6, (0, 255, 0), -1)
+                    cv2.putText(frame, "Izq", (c_izq[0] + 8, c_izq[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+                    if ult_izq is not None:
+                        dist_izq += math.hypot(c_izq[0] - ult_izq[0], c_izq[1] - ult_izq[1])
+                    ult_izq = c_izq
+            puntos_izq.appendleft(c_izq)
+
+            # Mano Derecha (Azul)
+            mask_a = cv2.inRange(hsv, AZUL_BAJO, AZUL_ALTO)
+            mask_a = cv2.erode(mask_a, None, iterations=1)
+            mask_a = cv2.dilate(mask_a, None, iterations=1)
+            cnts_a, _ = cv2.findContours(mask_a, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            c_der = None
+            if len(cnts_a) > 0:
+                c = max(cnts_a, key=cv2.contourArea)
+                if cv2.contourArea(c) > 80:
+                    ((x, y), _) = cv2.minEnclosingCircle(c)
+                    c_der = (int(x), int(y))
+                    cv2.circle(frame, c_der, 6, (255, 0, 0), -1)
+                    cv2.putText(frame, "Der", (c_der[0] + 8, c_der[1]), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
+                    if ult_der is not None:
+                        dist_der += math.hypot(c_der[0] - ult_der[0], c_der[1] - ult_der[1])
+                    ult_der = c_der
+            puntos_der.appendleft(c_der)
+
+            # Dibujar estelas
+            for i in range(1, len(puntos_izq)):
+                if puntos_izq[i - 1] and puntos_izq[i]:
+                    cv2.line(frame, puntos_izq[i - 1], puntos_izq[i], (0, 255, 0), 2)
+            for i in range(1, len(puntos_der)):
+                if puntos_der[i - 1] and puntos_der[i]:
+                    cv2.line(frame, puntos_der[i - 1], puntos_der[i], (255, 0, 0), 2)
+
+            t_actual = round(time.time() - t_inicio, 1)
+            cv2.rectangle(frame, (10, 10), (280, 100), (0, 0, 0), -1)
+            cv2.putText(frame, f"Tiempo: {t_actual} s", (20, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.putText(frame, f"Dist. Izq: {int(dist_izq)} px", (20, 57), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            cv2.putText(frame, f"Dist. Der: {int(dist_der)} px", (20, 82), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 100, 100), 1)
+
+            # Convertir de BGR a RGB para mostrar en Streamlit
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame_placeholder.image(frame_rgb, channels="RGB", use_container_width=True)
+
+            if btn_detener:
+                st.session_state.grabando = False
+                cap.release()
+                
+                t_fin = round(time.time() - t_inicio, 1)
+                d_tot = round(dist_izq + dist_der, 1)
+                ratio = round(dist_izq / dist_der, 2) if dist_der > 0 else 1.0
+                goals_auto = 22 if (t_fin <= 100 and d_tot < 4000) else (18 if t_fin <= 140 else 14)
+                
+                guardar_intento(
+                    alumno_id, ejercicio_actual, t_fin, 0,
+                    round(dist_izq, 1), round(dist_der, 1), d_tot, ratio, goals_auto,
+                    f"Tracking cinemático. Total: {int(d_tot)}px | Ratio: {ratio}"
+                )
+                st.success(f"✅ Guardado: {t_fin}s | Distancia: {int(d_tot)}px | Ratio: {ratio}")
+                time.sleep(1)
+                st.rerun()
+                break
+
     st.markdown("---")
     st.markdown("##### Opción B: Carga Manual (Docente)")
     with st.form("form_manual"):
@@ -276,7 +286,7 @@ with col_izq:
             st.rerun()
 
 # ----------------------------------------------------
-# COLUMNA DERECHA: ANALÍTICA Y CURVAS CUSUM
+# COLUMNA DERECHA: DASHBOARD Y CURVAS
 # ----------------------------------------------------
 with col_der:
     st.subheader("📈 Desempeño y Métricas Cinemáticas")
@@ -302,14 +312,12 @@ with col_der:
             k2.metric("Mejor Tiempo", f"{mejor_t:.1f} s")
             k3.metric("Mejor Trayectoria", f"{int(mejor_dist)} px" if mejor_dist > 0 else "N/A")
             
-            # Competencia
             ultimos_2 = df_intentos.tail(2)
             if len(ultimos_2) >= 2 and (ultimos_2['tiempo_segundos'] <= meta_t).all() and (ultimos_2['puntaje_goals'] >= 21).all():
                 k4.success("🌟 COMPETENTE")
             else:
                 k4.info("🔄 En Formación")
             
-            # Pestañas de Gráficos
             tab1, tab2, tab3 = st.tabs(["📊 Curva CUSUM", "📏 Economía de Movimiento", "📋 Historial"])
             
             with tab1:
