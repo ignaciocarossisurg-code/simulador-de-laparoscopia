@@ -157,31 +157,31 @@ st.title("🎯 Evaluación y Curvas de Aprendizaje Laparoscópico")
 col_izq, col_der = st.columns([1.1, 1.4], gap="large")
 
 # ----------------------------------------------------
-# COLUMNA IZQUIERDA: CÁMARA Y TRACKING ORIGINAL
+# COLUMNA IZQUIERDA: CÁMARA Y TRACKING
 # ----------------------------------------------------
 with col_izq:
     st.subheader("📹 Captura de Ejercicio")
     
     st.markdown("##### Opción A: Registro por Cámara en Vivo")
-    st.caption("ℹ️ *Tocá el botón rojo superior derecho con la pinza para finalizar el ejercicio sin demoras.*")
+    st.caption("ℹ️ *Tocá el botón rojo superior derecho con la pinza o hacé clic en Finalizar para terminar.*")
 
     if "grabando" not in st.session_state:
         st.session_state.grabando = False
 
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
-        if st.button("▶️ Iniciar Cámara", use_container_width=True, type="primary", disabled=st.session_state.grabando):
+        if st.button("▶️ Iniciar Cámara", use_container_width=True, type="primary"):
             st.session_state.grabando = True
             st.session_state.tiempo_arranque = time.time()
             st.rerun()
 
     with col_btn2:
-        btn_detener_web = st.button("⏹️ Finalizar y Guardar", use_container_width=True, disabled=not st.session_state.grabando)
+        btn_detener_web = st.button("⏹️ Finalizar y Guardar", use_container_width=True)
 
     frame_placeholder = st.empty()
 
     if st.session_state.grabando:
-        # PARÁMETROS HSV ORIGINALES PRECISOS
+        # Calibración original precisa
         VERDE_BAJO = np.array([35, 80, 80])
         VERDE_ALTO = np.array([85, 255, 255])
         AZUL_BAJO = np.array([95, 100, 100])
@@ -210,7 +210,7 @@ with col_izq:
 
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-            # Mano Izquierda (Verde) - Filtro original preciso
+            # Mano Izquierda (Verde)
             mask_v = cv2.inRange(hsv, VERDE_BAJO, VERDE_ALTO)
             mask_v = cv2.erode(mask_v, None, iterations=1)
             mask_v = cv2.dilate(mask_v, None, iterations=1)
@@ -218,7 +218,7 @@ with col_izq:
             c_izq = None
             if len(cnts_v) > 0:
                 c = max(cnts_v, key=cv2.contourArea)
-                if cv2.contourArea(c) > 80:  # Tamaño original estable
+                if cv2.contourArea(c) > 80:
                     ((x, y), _) = cv2.minEnclosingCircle(c)
                     c_izq = (int(x), int(y))
                     cv2.circle(frame, c_izq, 6, (0, 255, 0), -1)
@@ -228,7 +228,7 @@ with col_izq:
                     ult_izq = c_izq
             puntos_izq.appendleft(c_izq)
 
-            # Mano Derecha (Azul) - Filtro original preciso
+            # Mano Derecha (Azul)
             mask_a = cv2.inRange(hsv, AZUL_BAJO, AZUL_ALTO)
             mask_a = cv2.erode(mask_a, None, iterations=1)
             mask_a = cv2.dilate(mask_a, None, iterations=1)
@@ -236,7 +236,7 @@ with col_izq:
             c_der = None
             if len(cnts_a) > 0:
                 c = max(cnts_a, key=cv2.contourArea)
-                if cv2.contourArea(c) > 80:  # Tamaño original estable
+                if cv2.contourArea(c) > 80:
                     ((x, y), _) = cv2.minEnclosingCircle(c)
                     c_der = (int(x), int(y))
                     cv2.circle(frame, c_der, 6, (255, 0, 0), -1)
@@ -262,7 +262,7 @@ with col_izq:
             cv2.putText(frame, f"Dist. Izq: {int(dist_izq)} px", (20, 57), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
             cv2.putText(frame, f"Dist. Der: {int(dist_der)} px", (20, 82), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 100, 100), 1)
 
-            # Botón interactivo superior derecho
+            # Botón interactivo en pantalla
             pinza_en_boton = False
             for pt in [c_izq, c_der]:
                 if pt and (BTN_X1 <= pt[0] <= BTN_X2) and (BTN_Y1 <= pt[1] <= BTN_Y2):
